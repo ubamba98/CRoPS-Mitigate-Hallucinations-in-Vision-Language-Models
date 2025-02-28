@@ -1,0 +1,26 @@
+KEY_POSITION = "key_position"
+
+AGGREGATE_LAYER_FAST_V = "aggregate_layer_fast_v"
+MINUMUM_FAST_V_TOKENS = "minumum_fast_v_tokens"
+
+AGGREGATE_LAYER_TEXT_MASK = "aggregate_layer_text_mask"
+MINIMUM_TEXT_TOKENS = "minimum_text_tokens"
+
+INPUT_IDS_LANG_PRIOR = "input_ids_lang_prior"
+LAMBDA_LANG_PRIOR = "lambda_lang_prior"
+
+ALPHA_STAT_BIAS = "alpha_stat_bias"
+BETA_CUTOFF = "beta_cutoff"
+MAX_THRESHOLD_PLAUSIBILITY_CONSTRAINT = "max_threshold_plausibility_constraint"
+
+# Default values for CRoPS
+DEFAULT_LAMBDA_LANG_PRIOR = 0.01
+DEFAULT_ALPHA_STAT_BIAS = 1
+DEFAULT_BETA_CUTOFF = 0.1
+DEFAULT_MAX_THRESHOLD_PLAUSIBILITY_CONSTRAINT = 0.95
+
+DEFAULT_AGGREGATE_LAYER_FAST_V = 2
+DEFAULT_MINUMUM_FAST_V_TOKENS = 50
+
+DEFAULT_AGGREGATE_LAYER_TEXT_MASK = 2
+DEFAULT_MINIMUM_TEXT_TOKENS = 50

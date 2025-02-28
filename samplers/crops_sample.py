@@ -16,20 +16,19 @@ from transformers.generation.utils import (
     GenerateNonBeamOutput, 
     GenerateEncoderDecoderOutput, GenerateDecoderOnlyOutput
 )
-from transformers.generation.configuration_utils import GenerationConfig
-from transformers.generation.streamers import BaseStreamer
-from transformers.cache_utils import Cache
 
-from utils.samplers_utils import get_generations, get_next_token_logits, get_text_mask_rank 
+from transformers.generation.streamers import BaseStreamer
+
+from generation_configs.crops_generation_config import GenerationConfigCRoPS
+from utils.crops_samplers_utils import get_generations, get_next_token_logits
 
 def crops_sample(
     self,
     input_ids: torch.LongTensor,
     logits_processor: LogitsProcessorList,
     stopping_criteria: StoppingCriteriaList,
-    generation_config: GenerationConfig,
+    generation_config: GenerationConfigCRoPS,
     synced_gpus: bool,
-    key_position: Optional[dict] = None,
     streamer: Optional["BaseStreamer"] = None,
     **model_kwargs,
 ) -> Union[GenerateNonBeamOutput, torch.LongTensor]:
@@ -51,8 +50,6 @@ def crops_sample(
         synced_gpus (`bool`):
             Whether to continue running the while loop until max_length (needed to avoid deadlocking with
             `FullyShardedDataParallel` and DeepSpeed ZeRO Stage 3).
-        key_position (`dict`, *optional*):
-            A dictionary containing the key position of the input ids. Used for FastV.
         streamer (`BaseStreamer`, *optional*):
             Streamer object that will be used to stream the generated sequences. Generated tokens are passed
             through `streamer.put(token_ids)` and the streamer is responsible for any further processing.
@@ -92,38 +89,47 @@ def crops_sample(
             model_kwargs["encoder_outputs"].get("hidden_states") if output_hidden_states else None
         )
 
+    #### Intialise variables for CRoPS ####
+    pixel_values = model_kwargs.pop("pixel_values", None)
+    key_position = generation_config.key_position
+
+    # Lang Prior
+    model_kwargs_lang_prior = model_kwargs.copy()
+    input_ids_lang_prior = generation_config.input_ids_lang_prior
+    lambda_lang_prior = generation_config.lambda_lang_prior
+
+    ## Update attention mask for lang prior
+    model_kwargs_lang_prior["attention_mask"] = torch.ones_like(input_ids_lang_prior)
+
+    # Stat Bias
+    model_kwargs_stat_bias = model_kwargs.copy()
+    alpha_stat_bias = generation_config.alpha_stat_bias
+
+    # Other
+    time_step = 1
+    beta_cutoff = torch.tensor(generation_config.beta_cutoff)
+    max_threshold_plausibility_constraint = torch.tensor(
+        generation_config.max_threshold_plausibility_constraint
+    )
+    
     # keep track of which sequences are already finished
     batch_size, cur_len = input_ids.shape
     this_peer_finished = False
     unfinished_sequences = torch.ones(batch_size, dtype=torch.long, device=input_ids.device)
+
     model_kwargs = self._get_initial_cache_position(input_ids, model_kwargs)
-
-    #### Intialise variables for CRoPS ####
-    # Lang Prior
-    model_kwargs_lang_prior = model_kwargs.copy()
-    input_ids_lang_prior = model_kwargs_lang_prior.get("input_ids_lang_prior", None)
-    lambda_lang_prior = model_kwargs_lang_prior.get("lambda_lang_prior", 0.01)
-
-    # Stat Bias
-    model_kwargs_stat_bias = model_kwargs.copy()
-    alpha_stat_bias = model_kwargs_stat_bias.get("alpha_stat_bias", 1) 
-
-    # Other
-    time_step = 1
-    beta_cutoff = torch.tensor(model_kwargs.get("beta_cutoff", 0.1))
-    max_threshold_plausibility_constraint = torch.tensor(model_kwargs.get("max_threshold_plausibility_constraint", 0.95))
+    model_kwargs_lang_prior = self._get_initial_cache_position(input_ids_lang_prior, model_kwargs_lang_prior)
+    model_kwargs_stat_bias = self._get_initial_cache_position(input_ids, model_kwargs_stat_bias)
 
     while self._has_unfinished_sequences(
         this_peer_finished, synced_gpus, device=input_ids.device, cur_len=cur_len, max_length=max_length
     ):
-        # Reset the model to normal input
-        # self.model.reset_text_mask(use_text_mask = False)
-        # self.model.reset_fastv(use_fast_v = False)
 
         outputs, model_kwargs = get_generations(self,
-                                                input_ids, 
-                                                model_kwargs,
-                                                prepare_inputs_for_generation_fn=self.prepare_inputs_for_generation, 
+                                                input_ids,
+                                                pixel_values=pixel_values,
+                                                model_kwargs=model_kwargs,
+                                                generation_config=generation_config,
                                                 key_position=None, 
                                                 use_text_mask=False,
                                                 use_fast_v=False,
@@ -134,14 +140,13 @@ def crops_sample(
             continue
 
         next_token_logits = get_next_token_logits(outputs, input_ids)
-        
-        # logits with Language Prior
-        # self.model.reset_text_mask(use_text_mask = True)
 
+        # logits with Language Prior
         outputs_lang_prior, model_kwargs_lang_prior = get_generations(self,
-                                                input_ids_lang_prior, 
-                                                model_kwargs_lang_prior,
-                                                prepare_inputs_for_generation_fn=self.prepare_inputs_for_generation_lang_prior, 
+                                                input_ids_lang_prior,
+                                                pixel_values=None,
+                                                model_kwargs=model_kwargs_lang_prior,
+                                                generation_config=generation_config,
                                                 key_position=key_position, 
                                                 use_text_mask=True,
                                                 use_fast_v=False,
@@ -154,15 +159,11 @@ def crops_sample(
         next_token_logits_lang_prior = get_next_token_logits(outputs_lang_prior, input_ids_lang_prior)
 
         # logits with Stat Bias
-        # self.model.reset_text_mask(use_text_mask = False)
-
-        # if self.model.config.fast_v_attention_rank != None:
-        #     self.model.reset_fastv(use_fast_v = True)
-
         outputs_stat_bias, model_kwargs_stat_bias = get_generations(self,
                                                 input_ids, 
-                                                model_kwargs_stat_bias,
-                                                prepare_inputs_for_generation_fn=self.prepare_inputs_for_generation_stat_bias, 
+                                                pixel_values=pixel_values,
+                                                model_kwargs=model_kwargs_stat_bias,
+                                                generation_config=generation_config,
                                                 key_position=key_position, 
                                                 use_text_mask=False,
                                                 use_fast_v=True,
@@ -189,12 +190,14 @@ def crops_sample(
             gamma_lang_prior = math.exp(-lambda_lang_prior * time_step)
             
             # Remove Language Prior
-            final_logits = log_probs_next_token + (1-gamma_lang_prior)/gamma_lang_prior * (log_probs_next_token - log_probs_next_token_lang_prior)
+            final_logits = log_probs_next_token + \
+                (1-gamma_lang_prior)/gamma_lang_prior * (log_probs_next_token - log_probs_next_token_lang_prior)
 
             # Remove Stat Bias
             final_logits = (1+alpha_stat_bias) * log_probs_next_token - alpha_stat_bias * log_probs_next_token_stat_bias
 
         time_step += 1
+
         # pre-process distribution
         next_token_scores = logits_processor(input_ids, final_logits)
 
@@ -232,7 +235,7 @@ def crops_sample(
 
         # update generated ids, model inputs, and length for next step
         input_ids = torch.cat([input_ids, next_tokens[:, None]], dim=-1)
-        input_ids_lang_prior = torch.cat([input_ids_lang_prior, next_tokens[:, None]], dim=-1) #<--- Remove this for better performance
+        input_ids_lang_prior = torch.cat([input_ids_lang_prior, next_tokens[:, None]], dim=-1)
 
         if streamer is not None:
             streamer.put(next_tokens.cpu())
@@ -275,5 +278,3 @@ def crops_sample(
 
 def patch_crops_sampling():
     transformers.generation.utils.GenerationMixin._sample = crops_sample
-
-
