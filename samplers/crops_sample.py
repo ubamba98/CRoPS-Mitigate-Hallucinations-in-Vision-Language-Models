@@ -194,7 +194,7 @@ def crops_sample(
                 (1-gamma_lang_prior)/gamma_lang_prior * (log_probs_next_token - log_probs_next_token_lang_prior)
 
             # Remove Stat Bias
-            final_logits = (1+alpha_stat_bias) * log_probs_next_token - alpha_stat_bias * log_probs_next_token_stat_bias
+            final_logits = (1+alpha_stat_bias) * final_logits - alpha_stat_bias * log_probs_next_token_stat_bias
 
         time_step += 1
 
