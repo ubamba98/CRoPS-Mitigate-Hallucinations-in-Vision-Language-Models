@@ -33,7 +33,6 @@ from accelerate import PartialState
 from accelerate.utils import gather_object
 from transformers import AutoModelForImageTextToText, AutoProcessor
 
-
 distributed_state = PartialState()
 
 def args_parser():
@@ -97,7 +96,8 @@ def run_chair_benchmark(model, processor, args):
             chair_test_size=args.chair_test_size
         )
     
-    test_dataset = chair_benchmark.get_test_dataset()
+    with distributed_state.local_main_process_first():
+        test_dataset = chair_benchmark.get_test_dataset()
 
     conversation_lang_prior = [
             {
@@ -189,10 +189,9 @@ def run_chair_benchmark(model, processor, args):
 
     generations = gather_object(generations)
     if distributed_state.is_main_process:
-        print(generations)
         generations_path = os.path.join(experiment_name, "chair_generations.jsonl")
         chair_benchmark.dump_generations(generations, generations_path)
-        chair_benchmark.evaluate(generations_path, dump_results=False)
+        chair_benchmark.evaluate(generations_path, dump_results=True)
 
 if __name__ == "__main__":
     main()

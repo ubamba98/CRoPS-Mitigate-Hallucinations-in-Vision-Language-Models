@@ -16,7 +16,7 @@ class ChairBenchmarkDataset:
         self.base_image_path = base_image_path
         self.image_id_key = "image_id"
         self.caption_key = "caption"
-        self.image_dict = self._load_coco_data()
+        self.images = self._load_coco_data()
         self.chair_test_size = chair_test_size
 
     def _load_coco_data(self) -> dict:
@@ -48,23 +48,23 @@ class ChairBenchmarkDataset:
                 json.dump(result, f)
                 f.write('\n')
     
-    def get_test_dataset(self):
+    def get_test_dataset(self) -> list[dict]:
         """
         Get the test dataset.
         """
-        test_dataset_path = os.path.join(self.coco_path, f"chair_test_dataset_{self.chair_test_size}.json")
+        test_dataset_path = os.path.join(self.coco_path, f"chair_test_dataset_{self.chair_test_size}.npy")
         if os.path.exists(test_dataset_path):
-            test_dataset = np.load(test_dataset_path)
+            test_dataset = np.load(test_dataset_path, allow_pickle=True)
         else:
             test_dataset = np.random.choice(self.images, size=self.chair_test_size, replace=False)
             np.save(test_dataset_path, test_dataset)
-        return test_dataset
+        return list(test_dataset)
 
     def evaluate(self, results_path: str, dump_results: bool = True):
         """
         Evaluate the results using the CHAIR evaluator.
         """
-        evaluator_path = os.path.join(self.coco_path, "chair_evaluator.json")
+        evaluator_path = os.path.join(self.coco_path, "chair_evaluator.pkl")
         if os.path.exists(evaluator_path):
             evaluator = pickle.load(open(evaluator_path, "rb"))
         else:
