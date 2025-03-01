@@ -102,6 +102,7 @@ def crops_sample(
     model_kwargs_lang_prior["attention_mask"] = torch.ones_like(input_ids_lang_prior)
 
     # Stat Bias
+    model_kwargs_stat_bias = copy.deepcopy(model_kwargs)
     alpha_stat_bias = generation_config.alpha_stat_bias
 
     # Other
@@ -118,6 +119,7 @@ def crops_sample(
 
     model_kwargs = self._get_initial_cache_position(input_ids, model_kwargs)
     model_kwargs_lang_prior = self._get_initial_cache_position(input_ids_lang_prior, model_kwargs_lang_prior)
+    model_kwargs_stat_bias = self._get_initial_cache_position(input_ids, model_kwargs_stat_bias)
 
     while self._has_unfinished_sequences(
         this_peer_finished, synced_gpus, device=input_ids.device, cur_len=cur_len, max_length=max_length
@@ -157,10 +159,10 @@ def crops_sample(
         next_token_logits_lang_prior = get_next_token_logits(outputs_lang_prior, input_ids_lang_prior)
 
         # logits with Stat Bias
-        outputs_stat_bias, _ = get_generations(self,
+        outputs_stat_bias, model_kwargs_stat_bias = get_generations(self,
                                                 input_ids, 
                                                 pixel_values=pixel_values,
-                                                model_kwargs=model_kwargs, ## Use same cache position as main model
+                                                model_kwargs=model_kwargs_stat_bias,
                                                 generation_config=generation_config,
                                                 key_position=key_position, 
                                                 use_text_mask=False,
