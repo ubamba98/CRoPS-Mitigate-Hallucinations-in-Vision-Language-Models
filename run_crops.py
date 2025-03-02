@@ -1,7 +1,7 @@
 from methods.crops_method import patch_everything
 patch_everything()
 
-from methods.generation_configs.crops_generation_config import GenerationConfigCRoPS
+from methods.generation_configs.contrastive_generation_config import GenerationConfigContrastive
 
 from constants.crops_constants import (
     DEFAULT_LAMBDA_LANG_PRIOR,  
@@ -62,6 +62,7 @@ def args_parser():
 
     # Evaluation config
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--experiment_name", type=str, required=True)
 
     # Chair benchmark config
     parser.add_argument("--run_chair_benchmark", action='store_true',  default=True)
@@ -90,7 +91,7 @@ def main():
         run_chair_benchmark(model, processor, args)
 
 def run_chair_benchmark(model, processor, args):
-    experiment_name = os.path.join("experiments", "--".join(args.model_name.split("/")), "CRoPS")
+    experiment_name = os.path.join("experiments", "--".join(args.model_name.split("/")), "CRoPS", args.experiment_name)
     os.makedirs(experiment_name, exist_ok=True)
 
     chair_benchmark = ChairBenchmarkDataset(
@@ -162,7 +163,7 @@ def run_chair_benchmark(model, processor, args):
 
             image_token_ids = BACKBONE_IMAGE_TOKEN_IDS[args.model_name]
             image_tokens = np.where(inputs["input_ids"].cpu().numpy()==image_token_ids)[1]
-            generation_config = GenerationConfigCRoPS(
+            generation_config = GenerationConfigContrastive(
                 max_new_tokens=args.max_new_tokens,
                 top_p=args.top_p,
                 temperature=args.temperature,

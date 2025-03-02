@@ -22,7 +22,7 @@ from constants.crops_constants import (
     DEFAULT_MAX_THRESHOLD_PLAUSIBILITY_CONSTRAINT
 )
 
-class GenerationConfigCRoPS(GenerationConfig):
+class GenerationConfigContrastive(GenerationConfig):
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)

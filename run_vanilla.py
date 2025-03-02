@@ -33,6 +33,7 @@ def args_parser():
 
     # Evaluation config
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--experiment_name", type=str, required=True)
 
     # Chair benchmark config
     parser.add_argument("--run_chair_benchmark", action='store_true',  default=True)
@@ -61,7 +62,7 @@ def main():
         run_chair_benchmark(model, processor, args)
 
 def run_chair_benchmark(model, processor, args):
-    experiment_name = os.path.join("experiments", "--".join(args.model_name.split("/")), "vanilla")
+    experiment_name = os.path.join("experiments", "--".join(args.model_name.split("/")), "vanilla", args.experiment_name)
     os.makedirs(experiment_name, exist_ok=True)
 
     chair_benchmark = ChairBenchmarkDataset(

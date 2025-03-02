@@ -19,7 +19,7 @@ from transformers.generation.utils import (
 
 from transformers.generation.streamers import BaseStreamer
 
-from methods.generation_configs.crops_generation_config import GenerationConfigCRoPS
+from methods.generation_configs.contrastive_generation_config import GenerationConfigContrastive
 from methods.utils.crops_samplers_utils import get_generations, get_next_token_logits
 
 def crops_sample(
@@ -27,7 +27,7 @@ def crops_sample(
     input_ids: torch.LongTensor,
     logits_processor: LogitsProcessorList,
     stopping_criteria: StoppingCriteriaList,
-    generation_config: GenerationConfigCRoPS,
+    generation_config: GenerationConfigContrastive,
     synced_gpus: bool,
     streamer: Optional["BaseStreamer"] = None,
     **model_kwargs,
