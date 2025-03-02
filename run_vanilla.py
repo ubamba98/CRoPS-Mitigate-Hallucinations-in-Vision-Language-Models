@@ -14,7 +14,12 @@ import argparse
 from tqdm.auto import tqdm
 from accelerate import PartialState
 from accelerate.utils import gather_object
-from transformers import AutoModelForImageTextToText, AutoProcessor, GenerationConfig
+from transformers import (
+    AutoModelForImageTextToText, 
+    AutoProcessor, 
+    GenerationConfig, 
+    BitsAndBytesConfig
+)
 from transformers import logging
 logging.set_verbosity_error()
 
@@ -23,6 +28,8 @@ distributed_state = PartialState()
 def args_parser():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model_name", type=str, default="llava-hf/llava-1.5-7b-hf")
+    parser.add_argument("--load_in_8bit", action='store_true', default=False)
+    parser.add_argument("--load_in_4bit", action='store_true', default=False)
 
     # Generation config
     parser.add_argument("--do_sample", action='store_true',  default=True)
@@ -49,10 +56,22 @@ def main():
     set_reproducibility(args.seed)
 
     # Load model
+    if args.load_in_8bit:
+        bnb_config = BitsAndBytesConfig(
+            load_in_8bit=True,
+        )
+    elif args.load_in_4bit:
+        bnb_config = BitsAndBytesConfig(
+            load_in_4bit=True,
+        )
+    else:
+        bnb_config = None
+
     model = AutoModelForImageTextToText.from_pretrained(
         args.model_name, 
         torch_dtype=torch.bfloat16,
-        device_map={"": distributed_state.device}
+        device_map={"": distributed_state.device},
+        quantization_config=bnb_config
     )
 
     # Load processor

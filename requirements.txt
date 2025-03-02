@@ -1,4 +1,5 @@
 accelerate==1.4.0
+bitsandbytes==0.45.3
 nltk
 numpy
 pillow
