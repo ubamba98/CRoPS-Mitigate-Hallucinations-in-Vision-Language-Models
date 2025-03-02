@@ -1,8 +1,9 @@
-nltk
-numpy==2.2.0
-tqdm==4.67.0
-torch==2.6.0
-transformers==4.49.0
 accelerate==1.4.0
+nltk
+numpy
+pillow
+torch==2.6.0
+torchvision==0.21.0
+tqdm==4.67.0
+transformers==4.49.0
 sentencepiece==0.2.0
-
