@@ -26,8 +26,11 @@ from constants.default_generation_constants import (
 from benchmark.chair_benchmark import ChairBenchmarkDataset
 from utils.reproducibility_util import set_reproducibility
 
+from benchmark.evaluators.mme.utils import MMEDataset
+
 import os
 import torch
+import json
 import argparse
 import numpy as np
 from tqdm.auto import tqdm
@@ -35,6 +38,7 @@ from accelerate import PartialState
 from accelerate.utils import gather_object
 from transformers import AutoModelForImageTextToText, AutoProcessor, BitsAndBytesConfig
 from transformers import logging
+from datasets import load_dataset
 logging.set_verbosity_error()
 
 distributed_state = PartialState()
@@ -66,6 +70,8 @@ def args_parser():
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--experiment_name", type=str, required=True)
 
+    # Mathvista benchmark 
+    parser.add_argument("--run_mathvista_benchmark",action='store_true',default=False)
     # Chair benchmark config
     parser.add_argument("--run_chair_benchmark", action='store_true', default=False)
     parser.add_argument("--coco_path", type=str, default='dataset/annotations')
@@ -105,6 +111,121 @@ def main():
 
     if args.run_chair_benchmark:
         run_chair_benchmark(model, processor, args)
+    if args.run_mathvista_benchmark:
+        run_mathvista_benchmark(model, processor, args)
+
+def run_mme_benchmark(model,processor,args):
+    pass
+
+def run_mathvista_benchmark(model, processor, args):
+    experiment_name = os.path.join("experiments", "--".join(args.model_name.split("/")), "CRoPS", "MathVista")
+    os.makedirs(experiment_name, exist_ok=True)
+
+    data_list = load_dataset('AI4Math/MathVista', split='testmini')
+
+    generations = []
+
+    with distributed_state.split_between_processes(data_list) as process_data_list:
+        for problem in tqdm(process_data_list, desc=f"Running MathVista Benchmark. Process: {distributed_state.process_index}"):
+            problem_decoded_image = problem['decoded_image']
+            problem.pop('decoded_image')
+
+            query = problem['query']
+
+            conversation_lang_prior = [
+                {
+                    "role": "system",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions."
+                        }
+                    ]
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": query},
+                    ],
+                },
+            ]
+
+            input_ids_lang_prior = processor.apply_chat_template(
+                conversation_lang_prior,
+                add_generation_prompt=True,
+                tokenize=True,
+                return_dict=True,
+                return_tensors="pt"
+            ).to(distributed_state.device, torch.bfloat16)
+            input_ids_lang_prior = input_ids_lang_prior["input_ids"]
+
+            # Construct the conversation input
+            conversation = [
+                {
+                    "role": "system",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions."
+                        }
+                    ]
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image", "url": problem_decoded_image},
+                        {"type": "text", "text": query},
+                    ],
+                },
+            ]
+
+            inputs = processor.apply_chat_template(
+                conversation,
+                add_generation_prompt=True,
+                tokenize=True,
+                return_dict=True,
+                return_tensors="pt"
+            ).to(distributed_state.device, torch.bfloat16)
+
+            image_token_ids = BACKBONE_IMAGE_TOKEN_IDS[args.model_name]
+            image_tokens = np.where(inputs["input_ids"].cpu().numpy() == image_token_ids)[1]
+
+            generation_config = GenerationConfigContrastive(
+                max_new_tokens=args.max_new_tokens,
+                top_p=args.top_p,
+                temperature=args.temperature,
+                do_sample=args.do_sample,
+                key_position={
+                    "image_start": image_tokens[0],
+                    "image_end": image_tokens[-1],
+                },
+                input_ids_lang_prior=input_ids_lang_prior,
+                aggregate_layer_fast_v=args.aggregate_layer_fast_v,
+                minumum_fast_v_tokens=args.minumum_fast_v_tokens,
+                aggregate_layer_text_mask=args.aggregate_layer_text_mask,
+                minimum_text_tokens=args.minimum_text_tokens,
+                lambda_lang_prior=args.lambda_lang_prior,
+                alpha_stat_bias=args.alpha_stat_bias,
+                beta_cutoff=args.beta_cutoff,
+                max_threshold_plausibility_constraint=args.max_threshold_plausibility_constraint,
+                use_cache=True,
+            )
+
+            output_ids = model.generate(**inputs, generation_config=generation_config)
+            output_text = processor.decode(output_ids[0][len(inputs["input_ids"][0]):], skip_special_tokens=True)
+
+            generations.append({
+                "pid": problem['pid'],
+                "query": query,
+                "response": output_text
+            })
+
+    generations = gather_object(generations)
+
+    if distributed_state.is_main_process:
+        output_file_path = os.path.join(experiment_name, "mathvista_generations.jsonl")
+        with open(output_file_path, 'w') as f:
+            json.dump(generations, f, indent=4)
 
 def run_chair_benchmark(model, processor, args):
     experiment_name = os.path.join("experiments", "--".join(args.model_name.split("/")), "CRoPS", args.experiment_name)
@@ -147,9 +268,14 @@ def run_chair_benchmark(model, processor, args):
         ).to(distributed_state.device, torch.bfloat16)
     input_ids_lang_prior = input_ids_lang_prior["input_ids"]
 
+    i = 0
+
     with distributed_state.split_between_processes(test_dataset) as process_test_dataset:
         generations = []
         for test_image in tqdm(process_test_dataset, desc=f"Running Chair Benchmark. Process: {distributed_state.process_index}"):
+            # if i == 1:
+            #     break
+            # i += 1
             conversation = [
                 {
                     "role":"system",

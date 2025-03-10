@@ -141,6 +141,8 @@ def crops_sample(
 
         next_token_logits = get_next_token_logits(outputs, input_ids)
 
+        generation_config.minimum_text_tokens = new_text_tokens(time_step)
+        # generation_config.minimum_text_tokens = new_text_tokens1(time_step,(input_ids.shape[1]))
         # logits with Language Prior
         outputs_lang_prior, model_kwargs_lang_prior = get_generations(self,
                                                 input_ids_lang_prior,
@@ -158,7 +160,7 @@ def crops_sample(
 
         next_token_logits_lang_prior = get_next_token_logits(outputs_lang_prior, input_ids_lang_prior)
 
-        # logits with Stat Bias
+        # # # logits with Stat Bias
         outputs_stat_bias, model_kwargs_stat_bias = get_generations(self,
                                                 input_ids, 
                                                 pixel_values=pixel_values,
@@ -193,8 +195,8 @@ def crops_sample(
             final_logits = log_probs_next_token + \
                 (1-gamma_lang_prior)/gamma_lang_prior * (log_probs_next_token - log_probs_next_token_lang_prior)
 
-            # Remove Stat Bias
-            final_logits = (1+alpha_stat_bias) * final_logits - alpha_stat_bias * log_probs_next_token_stat_bias
+            # # # # # # Remove Stat Bias
+            # final_logits = (1+alpha_stat_bias) * final_logits - alpha_stat_bias * log_probs_next_token_stat_bias
 
         time_step += 1
 
@@ -247,7 +249,7 @@ def crops_sample(
         # This is needed to properly delete outputs.logits which may be very large for first iteration
         # Otherwise a reference to outputs is kept which keeps the logits alive in the next iteration
         del outputs, outputs_lang_prior, outputs_stat_bias
-
+        # del outputs, outputs_lang_prior
     if streamer is not None:
         streamer.end()
 
@@ -278,3 +280,12 @@ def crops_sample(
 
 def patch_crops_sampling():
     transformers.generation.utils.GenerationMixin._sample = crops_sample
+
+def new_text_tokens(t,b0=10,b1=30,lamda = 0.001):
+    return math.floor(b0 + b1*(1 - math.exp(-lamda*t)))
+
+def different_new_text_tokens(len):
+    return math.floor(0.1*len)
+
+def new_text_tokens1(t,len,b0=0.1,b1=0.3,lamda = 0.001):
+    return math.floor((b0 + b1*(1 - math.exp(-lamda*t)))*len)

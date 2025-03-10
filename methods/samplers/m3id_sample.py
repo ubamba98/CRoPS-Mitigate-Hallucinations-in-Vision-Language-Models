@@ -27,7 +27,7 @@ def m3id_sample(
     input_ids: torch.LongTensor,
     logits_processor: LogitsProcessorList,
     stopping_criteria: StoppingCriteriaList,
-    generation_config: GenerationConfigCRoPS,
+    generation_config: GenerationConfigContrastive,
     synced_gpus: bool,
     streamer: Optional["BaseStreamer"] = None,
     **model_kwargs,
@@ -118,7 +118,6 @@ def m3id_sample(
     while self._has_unfinished_sequences(
         this_peer_finished, synced_gpus, device=input_ids.device, cur_len=cur_len, max_length=max_length
     ):
-
         outputs, model_kwargs = get_generations(self,
                                                 input_ids,
                                                 pixel_values=pixel_values,
@@ -153,7 +152,6 @@ def m3id_sample(
         next_token_logits_lang_prior = get_next_token_logits(outputs_lang_prior, input_ids_lang_prior)
 
         log_probs_next_token = torch.log_softmax(next_token_logits, dim=-1)
-        probs_next_token = torch.softmax(next_token_logits, dim=-1)
 
         if log_probs_next_token.max(dim=-1, keepdim=True).values > max_threshold_plausibility_constraint:
             final_logits = next_token_logits

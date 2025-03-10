@@ -40,6 +40,7 @@ def get_generations(self,
     )
     return outputs, model_kwargs
 
+
 def get_next_token_logits(outputs, input_ids):
     # Clone is needed to avoid keeping a hanging ref to outputs.logits which may be very large for first iteration
     # (the clone itself is always small)
