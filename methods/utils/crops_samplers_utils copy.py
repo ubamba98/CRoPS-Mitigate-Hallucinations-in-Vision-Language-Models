@@ -12,9 +12,10 @@ def get_generations(self,
     model_inputs = self.prepare_inputs_for_generation(input_ids=input_ids, 
                                                       pixel_values=pixel_values, 
                                                       **model_kwargs)
-
     rope_deltas = model_kwargs.get("rope_deltas",None)
     model_inputs.update({"rope_deltas": rope_deltas}if rope_deltas is not None else {})
+    # print(model_inputs)
+
     # prepare variable output controls (note: some models won't accept all output controls)
     model_inputs.update({"output_attentions": output_attentions} if output_attentions else {})
     model_inputs.update({"output_hidden_states": output_hidden_states} if output_hidden_states else {})
@@ -34,6 +35,7 @@ def get_generations(self,
         minimum_text_tokens=generation_config.minimum_text_tokens,
     )
 
+    print(outputs['rope_deltas'])
     if ('rope_deltas' in outputs) and ('rope_deltas' not in model_kwargs):
         model_kwargs['rope_deltas'] = outputs['rope_deltas']
 
