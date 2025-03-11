@@ -168,7 +168,14 @@ def forward_conditional(
         video_grid_thw: Optional[torch.LongTensor] = None,
         rope_deltas: Optional[torch.LongTensor] = None,
         cache_position: Optional[torch.LongTensor] = None,
-        **model_kwargs
+        ## Additional arguments
+        key_position: Optional[dict] = None,
+        use_fast_v: Optional[bool] = None,
+        aggregate_layer_fast_v: Optional[int] = None,
+        minumum_fast_v_tokens: Optional[int] = None,
+        use_text_mask: Optional[bool] = None,
+        aggregate_layer_text_mask: Optional[int] = None,
+        minimum_text_tokens: Optional[int] = None,
     ) -> Union[Tuple, Qwen2VLCausalLMOutputWithPast]:
         r"""
             labels (`torch.LongTensor` of shape `(batch_size, sequence_length)`, *optional*):
@@ -292,6 +299,13 @@ def forward_conditional(
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
             cache_position=cache_position,
+            key_position=key_position,
+            use_fast_v=use_fast_v,
+            aggregate_layer_fast_v=aggregate_layer_fast_v,
+            minumum_fast_v_tokens=minumum_fast_v_tokens,
+            use_text_mask=use_text_mask,
+            aggregate_layer_text_mask=aggregate_layer_text_mask,
+            minimum_text_tokens=minimum_text_tokens,            
         )
 
         hidden_states = outputs[0]
