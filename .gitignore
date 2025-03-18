@@ -2,3 +2,5 @@ experiments/
 run.sh
 .DS_Store
 __pycache__/
+run1.sh
+run2.sh
