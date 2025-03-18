@@ -105,6 +105,8 @@ def sid_sample(
     this_peer_finished = False
     unfinished_sequences = torch.ones(batch_size, dtype=torch.long, device=input_ids.device)
 
+    time_step = 0
+
     model_kwargs = self._get_initial_cache_position(input_ids, model_kwargs)
     model_kwargs_stat_bias = self._get_initial_cache_position(input_ids, model_kwargs_stat_bias)
 
@@ -145,12 +147,19 @@ def sid_sample(
 
         next_token_logits_stat_bias = get_next_token_logits(outputs_stat_bias, input_ids) 
 
+        probs_next_token = torch.softmax(next_token_logits, dim=-1)
         # Remove Stat Bias
+        # if probs_next_token.max(dim=-1, keepdim=True).values > 0.3:
+        #     final_logits = next_token_logits
+        # else:
         final_logits = (1+alpha_stat_bias) * next_token_logits - alpha_stat_bias * next_token_logits_stat_bias
+        # final_logits = next_token_logits_stat_bias
 
         # Apply cutoff threshold
         cutoff_th = torch.log(beta_cutoff) + next_token_logits.max(dim=-1, keepdim=True).values
         next_token_logits = final_logits.masked_fill(next_token_logits<cutoff_th,-float("inf"))
+
+        time_step += 1
 
         # pre-process distribution
         next_token_scores = logits_processor(input_ids, final_logits)

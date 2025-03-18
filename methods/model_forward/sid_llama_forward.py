@@ -105,6 +105,7 @@ def forward(
             causal_mask = self._update_causal_mask(
                 augmented_attention_mask, inputs_embeds, cache_position, past_key_values, output_attentions
             )
+            # print(causal_mask.shape) 
 
             layer_outputs = decoder_layer(
                     hidden_states,

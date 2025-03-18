@@ -24,15 +24,18 @@ from constants.default_generation_constants import (
 )
 
 from benchmark.chair_benchmark import ChairBenchmarkDataset
+from benchmark.evaluators.mme.utils import MMEDataset,parse_pred_ans,eval_type_dict
 from utils.reproducibility_util import set_reproducibility
 
-from benchmark.evaluators.mme.utils import MMEDataset
+from collections import defaultdict
 
 import os
 import torch
+import gc
 import json
 import argparse
 import numpy as np
+from PIL import Image
 from tqdm.auto import tqdm
 from accelerate import PartialState
 from accelerate.utils import gather_object
@@ -72,6 +75,8 @@ def args_parser():
 
     # Mathvista benchmark 
     parser.add_argument("--run_mathvista_benchmark",action='store_true',default=False)
+    # MME benchmark 
+    parser.add_argument("--run_mme_benchmark",action='store_true',default=False)
     # Chair benchmark config
     parser.add_argument("--run_chair_benchmark", action='store_true', default=False)
     parser.add_argument("--coco_path", type=str, default='dataset/annotations')
@@ -113,9 +118,232 @@ def main():
         run_chair_benchmark(model, processor, args)
     if args.run_mathvista_benchmark:
         run_mathvista_benchmark(model, processor, args)
+    if args.run_mme_benchmark:
+        run_mme_benchmark(model,processor,args)
 
 def run_mme_benchmark(model,processor,args):
-    pass
+    experiment_name = os.path.join("experiments", "--".join(args.model_name.split("/")), "CRoPS", "MME")
+
+    ds = load_dataset("darkyarding/MME")
+    ds  = ds['test']
+    mme_dataset = MMEDataset(ds = ds)
+
+    question_pairs = defaultdict(list)
+    for sample in tqdm(mme_dataset,total = len(mme_dataset)):
+        question_pairs[sample["question_id"]].append(sample)
+
+    category2score = defaultdict(list)
+
+    for question_id, samples in tqdm(question_pairs.items(),total = len(question_pairs)):
+        assert len(samples) == 2, f"Question ID {question_id} does not have a pair!"
+
+        # img = samples[0]["image"].unsqueeze(0).half().cuda()
+        category = samples[0]["category"]
+        question_1, gt_ans_1 =samples[0]["question"], samples[0]["answer"]
+        question_2, gt_ans_2 = samples[1]["question"], samples[1]["answer"]
+
+
+        gt_ans_1 = gt_ans_1.lower()
+        gt_ans_2 = gt_ans_2.lower()
+
+
+        conversation_lang_prior_1 = [
+                {
+                    "role": "system",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions."
+                        }
+                    ]
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": question_1},
+                    ],
+                },
+            ]
+        
+        conversation_lang_prior_2 = [
+                {
+                    "role": "system",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions."
+                        }
+                    ]
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": question_2},
+                    ],
+                },
+            ]
+
+        conversation_1 = [
+                {
+                    "role": "system",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions."
+                        }
+                    ]
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image", "url": (samples[0]['image'])},
+                        {"type": "text", "text": question_1},
+                    ],
+                },
+            ]
+        conversation_2 = [
+                {
+                    "role": "system",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions."
+                        }
+                    ]
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image", "url": (samples[1]['image'])},
+                        {"type": "text", "text": question_2},
+                    ],
+                },
+            ]
+        
+        inputs_1 = processor.apply_chat_template(
+                conversation_1,
+                add_generation_prompt=True,
+                tokenize=True,
+                return_dict=True,
+                return_tensors="pt"
+            ).to(distributed_state.device, torch.bfloat16)
+        # inputs_1 = {k: v.to(distributed_state.device, torch.bfloat16) for k, v in inputs_1.items()}
+        inputs_2 = processor.apply_chat_template(
+                conversation_2,
+                add_generation_prompt=True,
+                tokenize=True,
+                return_dict=True,
+                return_tensors="pt"
+            ).to(distributed_state.device, torch.bfloat16)
+        # inputs_2 = {k: v.to(distributed_state.device, torch.bfloat16) for k, v in inputs_2.items()}
+        input_ids_lang_prior_1 = processor.apply_chat_template(
+                conversation_lang_prior_1,
+                add_generation_prompt=True,
+                tokenize=True,
+                return_dict=True,
+                return_tensors="pt"
+            ).to(distributed_state.device, torch.bfloat16)
+        # input_ids_lang_prior_1 = {k: v.to(distributed_state.device, torch.bfloat16) for k, v in input_ids_lang_prior_1.items()}
+        input_ids_lang_prior_1 = input_ids_lang_prior_1["input_ids"]
+        input_ids_lang_prior_2 = processor.apply_chat_template(
+                conversation_lang_prior_2,
+                add_generation_prompt=True,
+                tokenize=True,
+                return_dict=True,
+                return_tensors="pt"
+            ).to(distributed_state.device, torch.bfloat16)
+#       input_ids_lang_prior_2 = {k: v.to(distributed_state.device, torch.bfloat16) for k, v in input_ids_lang_prior_2.items()}
+        input_ids_lang_prior_2 = input_ids_lang_prior_2["input_ids"]
+
+
+        image_token_ids = BACKBONE_IMAGE_TOKEN_IDS[args.model_name]
+        image_tokens = np.where(inputs_1["input_ids"].cpu().numpy() == image_token_ids)[1]
+
+        generation_config_1 = GenerationConfigContrastive(
+            max_new_tokens=args.max_new_tokens,
+            top_p=args.top_p,
+            temperature=args.temperature,
+            do_sample=args.do_sample,
+            key_position={
+                "image_start": image_tokens[0],
+                "image_end": image_tokens[-1],
+            },
+            input_ids_lang_prior=input_ids_lang_prior_1,
+            aggregate_layer_fast_v=args.aggregate_layer_fast_v,
+            minumum_fast_v_tokens=args.minumum_fast_v_tokens,
+            aggregate_layer_text_mask=args.aggregate_layer_text_mask,
+            minimum_text_tokens=args.minimum_text_tokens,
+            lambda_lang_prior=args.lambda_lang_prior,
+            alpha_stat_bias=args.alpha_stat_bias,
+            beta_cutoff=args.beta_cutoff,
+            max_threshold_plausibility_constraint=args.max_threshold_plausibility_constraint,
+            use_cache=True,
+        )
+        with torch.no_grad():
+            output_ids = model.generate(**inputs_1, generation_config=generation_config_1)
+        output_text_1 = processor.decode(output_ids[0][len(inputs_1["input_ids"][0]):], skip_special_tokens=True) 
+        pred_ans_1 = parse_pred_ans(output_text_1)
+
+        del output_ids,inputs_1,input_ids_lang_prior_1
+        torch.cuda.empty_cache()
+        gc.collect()
+
+        image_tokens = np.where(inputs_2["input_ids"].cpu().numpy() == image_token_ids)[1]
+        generation_config_2 = GenerationConfigContrastive(
+        max_new_tokens=args.max_new_tokens,
+        top_p=args.top_p,
+        temperature=args.temperature,
+        do_sample=args.do_sample,
+        key_position={
+            "image_start": image_tokens[0],
+            "image_end": image_tokens[-1],
+        },
+        input_ids_lang_prior=input_ids_lang_prior_2,
+        aggregate_layer_fast_v=args.aggregate_layer_fast_v,
+        minumum_fast_v_tokens=args.minumum_fast_v_tokens,
+        aggregate_layer_text_mask=args.aggregate_layer_text_mask,
+        minimum_text_tokens=args.minimum_text_tokens,
+        lambda_lang_prior=args.lambda_lang_prior,
+        alpha_stat_bias=args.alpha_stat_bias,
+        beta_cutoff=args.beta_cutoff,
+        max_threshold_plausibility_constraint=args.max_threshold_plausibility_constraint,
+        use_cache=True,
+    )
+        with torch.no_grad():
+            output_ids = model.generate(**inputs_2, generation_config=generation_config_2)
+        output_text_2 = processor.decode(output_ids[0][len(inputs_2["input_ids"][0]):], skip_special_tokens=True)
+        pred_ans_2 = parse_pred_ans(output_text_2)
+
+        score_1 = 1.0 if pred_ans_1 == gt_ans_1 else 0.0
+        score_2 = 1.0 if pred_ans_2 == gt_ans_2 else 0.0
+
+        acc = (score_1 + score_2) / 2 * 100.0
+        acc_plus = 100.0 if score_1 == 1.0 and score_2 == 1.0 else 0.0
+        question_score = acc + acc_plus
+
+        category2score[category].append(question_score)
+        del inputs_2,input_ids_lang_prior_2, output_ids
+        torch.cuda.empty_cache()
+        gc.collect()
+
+    category2avg_score = {category: sum(scores) / len(scores) for category, scores in category2score.items()}
+
+    perception_score = sum(category2avg_score[cat] for cat in eval_type_dict["Perception"])
+    cognition_score = sum(category2avg_score[cat] for cat in eval_type_dict["Cognition"])
+
+    with open(os.path.join(experiment_name,'mme_results.txt'), "a") as f:
+        f.write(f"{args}\n")
+        f.write("=========== Perception ===========\n")
+        f.write(f"total score: {perception_score:.2f}\n\n")
+        for category in eval_type_dict["Perception"]:
+            f.write(f"\t {category}  score: {category2avg_score[category]:.2f}\n")
+
+        f.write("\n=========== Cognition ===========\n")
+        f.write(f"total score: {cognition_score:.2f}\n\n")
+        for category in eval_type_dict["Cognition"]:
+            f.write(f"\t {category}  score: {category2avg_score[category]:.2f}\n")
+
+    print("Evaluation complete. Results saved to 'mme_results.txt'.")
 
 def run_mathvista_benchmark(model, processor, args):
     experiment_name = os.path.join("experiments", "--".join(args.model_name.split("/")), "CRoPS", "MathVista")

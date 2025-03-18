@@ -109,24 +109,24 @@ class GetAttentionMaskwithFastVandTextMask:
         #     f.write(json.dumps(last_layer_attention_avg_last_tok.tolist()) + "\n")  # Each tensor on a new line
 
 
-        # if self._attention_mask.sum() > self._minimum_text_tokens:
-        #     top_attention_rank_index = last_layer_attention_avg_last_tok.topk(self._minimum_text_tokens, largest=False)
-        #     top_attention_rank_index = top_attention_rank_index.indices
-        # else:
-        #     top_attention_rank_index = last_layer_attention_avg_last_tok.topk(self._attention_mask.sum(), largest=False)
-        #     top_attention_rank_index = top_attention_rank_index.indices
+        if self._attention_mask.sum() > self._minimum_text_tokens:
+            top_attention_rank_index = last_layer_attention_avg_last_tok.topk(self._minimum_text_tokens, largest=False)
+            top_attention_rank_index = top_attention_rank_index.indices
+        else:
+            top_attention_rank_index = last_layer_attention_avg_last_tok.topk(self._attention_mask.sum(), largest=False)
+            top_attention_rank_index = top_attention_rank_index.indices
 
-        sorted_values, sorted_indices = torch.sort(last_layer_attention_avg_last_tok, descending=False)
+        # sorted_values, sorted_indices = torch.sort(last_layer_attention_avg_last_tok, descending=False)
 
-        cumulative_sum = 0.0
-        selected_indices = []
-        for idx, val in zip(sorted_indices, sorted_values):
-            cumulative_sum += val.item()
-            selected_indices.append(idx.item())
-            if cumulative_sum >= 0.1:
-                break 
+        # cumulative_sum = 0.0
+        # selected_indices = []
+        # for idx, val in zip(sorted_indices, sorted_values):
+        #     cumulative_sum += val.item()
+        #     selected_indices.append(idx.item())
+        #     if cumulative_sum >= 0.1:
+        #         break 
 
-        top_attention_rank_index = torch.tensor(selected_indices)
+        # top_attention_rank_index = torch.tensor(selected_indices)
 
         # generate text mask
         text_mask = torch.ones_like(self._attention_mask)

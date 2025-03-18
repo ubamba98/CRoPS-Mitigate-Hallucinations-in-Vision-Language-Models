@@ -134,6 +134,13 @@ def run_chair_benchmark(model, processor, args):
                 use_cache=True,
             )
 
+            # # Extract token IDs
+            # token_ids = inputs["input_ids"].tolist()[0]  # Convert tensor to list
+
+            # # Convert token IDs to actual tokens
+            # tokens = processor.tokenizer.convert_ids_to_tokens(token_ids)
+            # print(tokens)
+
             output_ids = model.generate(**inputs, generation_config=generation_config)
 
             output_text = processor.decode(output_ids[0][len(inputs["input_ids"][0]):], skip_special_tokens=True)            

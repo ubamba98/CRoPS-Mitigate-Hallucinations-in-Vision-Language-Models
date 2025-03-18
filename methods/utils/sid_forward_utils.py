@@ -45,6 +45,7 @@ class GetAttentionMaskwithFastV:
         ]
         # get the indexs of the top _minumum_fast_v_tokens tokens
         # print(last_layer_attention_avg_last_tok_image)
+        # print(self._minumum_fast_v_tokens)
         top_attention_rank_index = last_layer_attention_avg_last_tok_image.topk(self._minumum_fast_v_tokens, largest=False)
         top_attention_rank_index = top_attention_rank_index.indices + self._image_start
         
@@ -52,6 +53,9 @@ class GetAttentionMaskwithFastV:
         fast_v_attention_mask = torch.ones_like(self._attention_mask)
         fast_v_attention_mask[:, self._image_start:self._image_start+self._image_token_length] = False
         fast_v_attention_mask[:, top_attention_rank_index] = True
+
+        # print(fast_v_attention_mask[:, self._image_start:self._image_start+self._image_token_length].shape)
+        # print(fast_v_attention_mask[:, self._image_start:self._image_start+self._image_token_length].sum())
 
         self._attention_mask = fast_v_attention_mask
 
