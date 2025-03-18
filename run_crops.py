@@ -130,7 +130,7 @@ def run_mme_benchmark(model, processor, args):
     
     with distributed_state.split_between_processes(data_list) as process_data_list:
         results = []
-        for sample in tqdm(process_data_list, total=len(process_data_list), desc=f"Running Chair Benchmark. Process: {distributed_state.process_index}"):
+        for sample in tqdm(process_data_list, total=len(process_data_list), desc=f"Running MME Benchmark. Process: {distributed_state.process_index}"):
             question_id = sample["question_id"]
             category = sample["category"]
             question = sample["question"]
