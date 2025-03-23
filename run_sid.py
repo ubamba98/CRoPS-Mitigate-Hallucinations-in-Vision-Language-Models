@@ -23,6 +23,8 @@ from benchmark.chair_benchmark import ChairBenchmarkDataset
 from benchmark.evaluators.mme.utils import parse_pred_ans,eval_type_dict
 from benchmark.pope_utils import POPE_PATH,POPEDataSet,GQADataset,pope_metric,recorder
 from benchmark.mmmu_utils import CAT_SHORT2LONG,construct_prompt,process_single_sample,evaluate_mmmu
+from benchmark.shr.shr_utils import *
+from benchmark.shr.gpt_utils import *
 from utils.reproducibility_util import set_reproducibility
 
 from collections import defaultdict
@@ -34,6 +36,7 @@ import torch
 import argparse
 import numpy as np
 from tqdm.auto import tqdm
+from PIL import Image 
 from accelerate import PartialState
 from accelerate.utils import gather_object
 from transformers import AutoModelForImageTextToText, AutoProcessor
@@ -63,6 +66,12 @@ def args_parser():
     # Evaluation config
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--experiment_name", type=str, required=True)
+
+    # GPT-4 SHR benchmark 
+    parser.add_argument("--run_shr_benchmark",action='store_true',default=False)
+    parser.add_argument("--vg-path", type=str, default='dataset/OpenDataLab___Visual_Genome_Dataset_V1_dot_2/raw/data/', help="path to vg file.")
+    parser.add_argument("--shr-path", type=str, default='benchmark/shr', help="path to SHR annotation file.")
+    parser.add_argument("--api-key",type=str, default='',help='key to the OPENAI API')
 
     # MMMU benchmark
     parser.add_argument("--run_mmmu_benchmark",action='store_true',default=False)
@@ -111,6 +120,169 @@ def main():
         run_pope_benchmark(model,processor,args)
     if args.run_mmmu_benchmark:
         run_mmmu_benchmark(model,processor,args)
+    if args.run_shr_benchmark:
+        run_shr_benchmark(model,processor,args)
+
+def run_shr_benchmark(model,processor,args):
+    experiment_name = os.path.join("experiments", "--".join(args.model_name.split("/")), "SHR", "CRoPS",args.experiment_name)
+    os.makedirs(experiment_name, exist_ok=True)
+
+    setup_openai(args.api_key)
+
+    val_images = json.load(open(os.path.join(args.shr_path, "val_images_final.json")))
+    vg_image_data = json.load(open(os.path.join(args.vg_path, "image_data.json")))
+    id2path = {
+        _data["image_id"]:os.path.join(args.vg_path, _data["url"].split("/")[-2], _data["url"].split("/")[-1]) 
+        for _data in vg_image_data
+    }
+    id2img = {_data["image_id"]:_data for _data in vg_image_data}
+    region = json.load(open(os.path.join(args.vg_path, "region_descriptions.json")))
+    id2reg = {r["regions"][0]["image_id"]:r for r in region}
+    
+    judgement = {}
+    run_all = ['run1']
+    for run in run_all:
+        judgement[run] = {}
+    _gram1, _gram2, _gram3, _gram4 = 0, 0, 0, 0
+    
+    # factual information
+    factual_inf = {}
+    factual_part1 = os.path.join(args.shr_path, "shr_factual_part1.jsonl")
+    factual_part2 = os.path.join(args.shr_path, "shr_factual_part2.jsonl")
+    for line in open(factual_part1).readlines():
+        factual = json.loads(line)
+        image_id, factuals = list(factual.keys())[0], list(factual.values())[0]
+        factual_inf[image_id] = factuals
+    for line in open(factual_part2).readlines():
+        factual = json.loads(line)
+        image_id, factuals = list(factual.keys())[0], list(factual.values())[0]
+        factual_inf[image_id] = factuals
+
+    for _data in tqdm(val_images):
+        image_id = _data["image_id"]
+        image_path = id2path[int(image_id)]
+        image = Image.open(image_path).convert("RGB")
+
+        conversation = [
+            {
+                "role": "system",
+                "content": [
+                    {"type": "text", "text": "A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions."}
+                ]
+            },
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image", "url": image},
+                    {"type": "text", "text": 'Describe this image in detail.'},
+                ],
+            },
+        ]     
+        inputs = processor.apply_chat_template(
+            conversation,
+            add_generation_prompt=True,
+            tokenize=True,
+            return_dict=True,
+            return_tensors="pt"
+        ).to(distributed_state.device, torch.bfloat16)
+        
+        image_token_ids = BACKBONE_IMAGE_TOKEN_IDS[args.model_name]
+        image_tokens = np.where(inputs["input_ids"].cpu().numpy() == image_token_ids)[1]
+
+        generation_config = GenerationConfigContrastive(
+            max_new_tokens=args.max_new_tokens,
+            top_p=args.top_p,
+            temperature=args.temperature,
+            do_sample=args.do_sample,
+            key_position={
+                "image_start": image_tokens[0],
+                "image_end": image_tokens[-1],
+            },
+            aggregate_layer_fast_v=args.aggregate_layer_fast_v,
+            minumum_fast_v_tokens=args.minumum_fast_v_tokens,
+            alpha_stat_bias=args.alpha_stat_bias,
+            beta_cutoff=args.beta_cutoff,
+            use_cache=True,
+        )
+        
+        with torch.no_grad():
+            output_ids = model.generate(**inputs, generation_config=generation_config)
+        output_text = processor.decode(output_ids[0][len(inputs["input_ids"][0]):], skip_special_tokens=True)  
+
+        with open(os.path.join(experiment_name,"shr_outputs.jsonl"), "a") as file:
+            file.write(json.dumps({"image_id": image_id, "outputs": output_text}) + "\n") 
+
+        # get GPT judgement
+        description = get_desc(id2img, id2reg, int(image_id))
+        model_cap_sep, is_repeated = get_model_cap(output_text)
+        # calculate repetition
+        gram1 = cal_repetition(output_text,1)
+        gram2 = cal_repetition(output_text,2)
+        gram3 = cal_repetition(output_text,3)
+        gram4 = cal_repetition(output_text,4)
+        _gram1 += gram1
+        _gram2 += gram2
+        _gram3 += gram3
+        _gram4 += gram4
+            
+        # skip gpt judgement 
+        if args.no_gpt_judge:
+            continue
+            
+        factual_text = ""
+        if str(image_id) in factual_inf:
+            for text in factual_inf[str(image_id)]:
+                factual_text += text
+                factual_text += "\n"
+        # GPT judgement
+        judge_prompt = GPT_JUDGE_PROMPT.format(description, factual_text, model_cap_sep)
+        if len(judge_prompt) > 15000:
+            print(f"skip {image_id} for too long prompt!")
+            continue
+        for run in run_all:
+            while True:
+                judge = get_gpt_response(prompt=judge_prompt)
+                if "Judgement" not in judge:
+                    print(f"No judgement found for {image_id}")
+                    continue
+                else:
+                    break
+            # post-process
+            final_judge = post_process_no_revise(judge, output_text)
+            judgement[run][image_id] = {
+                "raw_judgement": judge,
+                "model_response": output_text,
+                "judgement": final_judge,
+            }
+    if args.no_gpt_judge:
+        print(f"gram-1 repetition: {round(_gram1/len(val_images), 3)}")
+        print(f"gram-2 repetition: {round(_gram2/len(val_images), 3)}")
+        print(f"gram-3 repetition: {round(_gram3/len(val_images), 3)}")
+        print(f"gram-4 repetition: {round(_gram4/len(val_images), 3)}")
+    else:
+        # save metrics
+        metrics = {}
+        for run in run_all:
+            metrics[run] = {}
+            get_metric(judgement[run], metrics[run])
+        # repetition
+        metrics['gram-1-repetition'] = round(_gram1/len(val_images), 3)
+        metrics['gram-2-repetition'] = round(_gram2/len(val_images), 3)
+        metrics['gram-3-repetition'] = round(_gram3/len(val_images), 3)
+        metrics['gram-4-repetition'] = round(_gram4/len(val_images), 3)
+        # halucination ratio
+        metrics["mean_hal_ratio"] = round(
+            sum(metrics[run]["hal_sents_ratio"] for run in run_all)/len(run_all), 3
+        )
+        metrics["model_base"] = args.model
+        print("judgement :- ",judgement)
+        print("metrics :- ",metrics)
+        # dump judgement file
+        with open(os.path.join(experiment_name, 'judgement.json'), "w") as f:
+            json.dump(judgement, f)
+        # dump metric file
+        with open(os.path.join(experiment_name, 'metrics.json'), "w") as f:
+            json.dump(metrics, f)
 
 def run_mmmu_benchmark(model,processor,args):
     experiment_name = os.path.join("experiments", "--".join(args.model_name.split("/")), "MMMU", "SID",args.experiment_name)
@@ -132,51 +304,55 @@ def run_mmmu_benchmark(model,processor,args):
 
             prompt = sample['final_input_prompt']
             image = sample['image'] 
-            conversation = [
-                {
-                    "role": "system",
-                    "content": [
-                        {"type": "text", "text": "A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions."}
-                    ]
-                },
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "image", "url": image},
-                        {"type": "text", "text": prompt},
-                    ],
-                },
-            ]     
-            inputs = processor.apply_chat_template(
-                conversation,
-                add_generation_prompt=True,
-                tokenize=True,
-                return_dict=True,
-                return_tensors="pt"
-            ).to(distributed_state.device, torch.bfloat16)
-            
-            image_token_ids = BACKBONE_IMAGE_TOKEN_IDS[args.model_name]
-            image_tokens = np.where(inputs["input_ids"].cpu().numpy() == image_token_ids)[1]
 
-            generation_config = GenerationConfigContrastive(
-                max_new_tokens=args.max_new_tokens,
-                top_p=args.top_p,
-                temperature=args.temperature,
-                do_sample=args.do_sample,
-                key_position={
-                    "image_start": image_tokens[0],
-                    "image_end": image_tokens[-1],
-                },
-                aggregate_layer_fast_v=args.aggregate_layer_fast_v,
-                minumum_fast_v_tokens=args.minumum_fast_v_tokens,
-                alpha_stat_bias=args.alpha_stat_bias,
-                beta_cutoff=args.beta_cutoff,
-                use_cache=True,
-            )
-            
-            with torch.no_grad():
-                output_ids = model.generate(**inputs, generation_config=generation_config)
-            output_text = processor.decode(output_ids[0][len(inputs["input_ids"][0]):], skip_special_tokens=True)              
+            try:
+                conversation = [
+                    {
+                        "role": "system",
+                        "content": [
+                            {"type": "text", "text": "A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions."}
+                        ]
+                    },
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "image", "url": image},
+                            {"type": "text", "text": prompt},
+                        ],
+                    },
+                ]     
+                inputs = processor.apply_chat_template(
+                    conversation,
+                    add_generation_prompt=True,
+                    tokenize=True,
+                    return_dict=True,
+                    return_tensors="pt"
+                ).to(distributed_state.device, torch.bfloat16)
+                
+                image_token_ids = BACKBONE_IMAGE_TOKEN_IDS[args.model_name]
+                image_tokens = np.where(inputs["input_ids"].cpu().numpy() == image_token_ids)[1]
+
+                generation_config = GenerationConfigContrastive(
+                    max_new_tokens=args.max_new_tokens,
+                    top_p=args.top_p,
+                    temperature=args.temperature,
+                    do_sample=args.do_sample,
+                    key_position={
+                        "image_start": image_tokens[0],
+                        "image_end": image_tokens[-1],
+                    },
+                    aggregate_layer_fast_v=args.aggregate_layer_fast_v,
+                    minumum_fast_v_tokens=args.minumum_fast_v_tokens,
+                    alpha_stat_bias=args.alpha_stat_bias,
+                    beta_cutoff=args.beta_cutoff,
+                    use_cache=True,
+                )
+                
+                with torch.no_grad():
+                    output_ids = model.generate(**inputs, generation_config=generation_config)
+                output_text = processor.decode(output_ids[0][len(inputs["input_ids"][0]):], skip_special_tokens=True) 
+            except:
+                output_text = 'A'             
             pred_ans = output_text
             out_samples[sample['id']] = pred_ans
 

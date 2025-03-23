@@ -127,11 +127,11 @@ def process_single_sample(data):
         for img_path in current_o_imgs_paths:
             o_imgs_paths.append(img_path)
 
-    # if len(o_imgs_paths) > 1:  # multiple images in options, used for random selection
-    #     return {'id': data['id'], 'question': question, 'options': data['options'], 'answer': data['answer'],
-    #          'image': None, 'question_type': data['question_type']}
-    # else:
-    return {'id': data['id'], 'question': question, 'options': data['options'], 'answer': data['answer'],
+    if len(o_imgs_paths) > 1:  # multiple images in options, used for random selection
+        return {'id': data['id'], 'question': question, 'options': data['options'], 'answer': data['answer'],
+             'image': None, 'question_type': data['question_type']}
+    else:
+        return {'id': data['id'], 'question': question, 'options': data['options'], 'answer': data['answer'],
             'image': data['image_1'], 'question_type': data['question_type']}
     
 def construct_prompt(sample):
