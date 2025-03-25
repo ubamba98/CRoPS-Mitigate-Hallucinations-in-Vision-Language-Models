@@ -29,6 +29,7 @@ from benchmark.pope_utils import POPE_PATH,POPEDataSet,GQADataset,pope_metric,re
 from benchmark.mmmu_utils import CAT_SHORT2LONG,construct_prompt,process_single_sample,evaluate_mmmu
 from benchmark.shr.shr_utils import *
 from benchmark.shr.gpt_utils import *
+from benchmark.mmbench_utils import all_options,MMBenchDataset,get_options,is_none
 from utils.reproducibility_util import set_reproducibility
 
 from collections import defaultdict
@@ -77,6 +78,9 @@ def args_parser():
     # Evaluation config
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--experiment_name", type=str, required=True)
+
+    # MMBench Benchmark
+    parser.add_argument("--run_mmbench_benchmark",action='store_true',default=False)
 
     # GPT-4 SHR benchmark 
     parser.add_argument("--run_shr_benchmark",action='store_true',default=False)
@@ -147,6 +151,125 @@ def main():
         run_mmmu_benchmark(model,processor,args)
     if args.run_shr_benchmark:
         run_shr_benchmark(model,processor,args)
+    if args.run_mmbench_benchmark:
+        run_mmbench_benchmark
+
+def run_mmbench_benchmark(model,processor,args):
+    experiment_name = os.path.join("experiments", "--".join(args.model_name.split("/")), "MMBench", "CRoPS",args.experiment_name)
+    os.makedirs(experiment_name, exist_ok=True)
+    ds = load_dataset("lmms-lab/MMBench","en")
+    ds = ds['dev']
+    mmbench_dataset = MMBenchDataset(ds = ds)
+
+    answers_file = os.path.join(experiment_name,'answers.jsonl')
+    ans_file = open(answers_file, "w")
+
+    data_list = list(mmbench_dataset)
+
+    with distributed_state.split_between_processes(data_list) as process_data_list:
+        for sample in tqdm(process_data_list, total=len(process_data_list), desc=f"Running MMBench Benchmark. Process: {distributed_state.process_index}"):       
+            options = get_options(sample, all_options)
+            cur_option_char = all_options[:len(options)]
+            num_rounds = len(options)
+
+            idx = sample['index']
+            question = sample['question']
+            hint = sample['hint']
+            answer = sample['answer']
+            image = sample['image']
+            if not is_none(hint):
+                question = hint + '\n' + question
+            for option_char, option in zip(all_options[:len(options)], options):
+                question = question + '\n' + option_char + '. ' + option
+            cur_prompt = question
+
+            for round_idx in range(num_rounds):
+                conversation_lang_prior = [
+                    {
+                        "role": "system",
+                        "content": [
+                            {"type": "text", "text": "A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions."}
+                        ]
+                    },
+                    {
+                        "role": "user",
+                        "content": [{"type": "text", "text": cur_prompt}],
+                    },
+                ]    
+                conversation = [
+                    {
+                        "role": "system",
+                        "content": [
+                            {"type": "text", "text": "A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions."}
+                        ]
+                    },
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "image", "url": image},
+                            {"type": "text", "text": cur_prompt},
+                        ],
+                    },
+                ]     
+                inputs = processor.apply_chat_template(
+                    conversation,
+                    add_generation_prompt=True,
+                    tokenize=True,
+                    return_dict=True,
+                    return_tensors="pt"
+                ).to(distributed_state.device, torch.bfloat16)
+                
+                input_ids_lang_prior = processor.apply_chat_template(
+                    conversation_lang_prior,
+                    add_generation_prompt=True,
+                    tokenize=True,
+                    return_dict=True,
+                    return_tensors="pt"
+                ).to(distributed_state.device, torch.bfloat16)["input_ids"]
+                
+                image_token_ids = BACKBONE_IMAGE_TOKEN_IDS[args.model_name]
+                image_tokens = np.where(inputs["input_ids"].cpu().numpy() == image_token_ids)[1]
+
+                generation_config = GenerationConfigContrastive(
+                    max_new_tokens=args.max_new_tokens,
+                    top_p=args.top_p,
+                    temperature=args.temperature,
+                    do_sample=args.do_sample,
+                    key_position={
+                        "image_start": image_tokens[0],
+                        "image_end": image_tokens[-1],
+                    },
+                    input_ids_lang_prior=input_ids_lang_prior,
+                    aggregate_layer_fast_v=args.aggregate_layer_fast_v,
+                    minumum_fast_v_tokens=args.minumum_fast_v_tokens,
+                    aggregate_layer_text_mask=args.aggregate_layer_text_mask,
+                    minimum_text_tokens=args.minimum_text_tokens,
+                    lambda_lang_prior=args.lambda_lang_prior,
+                    alpha_stat_bias=args.alpha_stat_bias,
+                    beta_cutoff=args.beta_cutoff,
+                    max_threshold_plausibility_constraint=args.max_threshold_plausibility_constraint,
+                    use_cache=True,
+                )
+                
+                with torch.no_grad():
+                    output_ids = model.generate(**inputs, generation_config=generation_config)
+                output_text = processor.decode(output_ids[0][len(inputs["input_ids"][0]):], skip_special_tokens=True)  
+                ans_file.write(json.dumps({"question_id": idx,
+                                        "round_id": round_idx,
+                                        "prompt": cur_prompt,
+                                        "text": output_text,
+                                        "answer":answer,
+                                        "options": options,
+                                        "option_char": cur_option_char,
+                                        "model_id": args.model,
+                                        "metadata": {}}) + "\n")
+                ans_file.flush()
+
+                # rotate options
+                options = options[1:] + options[:1]
+                cur_option_char = cur_option_char[1:] + cur_option_char[:1]
+    ans_file.close()
+                    
     
 def run_shr_benchmark(model,processor,args):
     experiment_name = os.path.join("experiments", "--".join(args.model_name.split("/")), "SHR", "CRoPS",args.experiment_name)
@@ -330,7 +453,6 @@ def run_shr_benchmark(model,processor,args):
     # dump metric file
     with open(os.path.join(experiment_name, 'metrics.json'), "w") as f:
         json.dump(metrics, f)
-
 
 def run_mmmu_benchmark(model,processor,args):
     experiment_name = os.path.join("experiments", "--".join(args.model_name.split("/")), "MMMU", "CRoPS",args.experiment_name)
