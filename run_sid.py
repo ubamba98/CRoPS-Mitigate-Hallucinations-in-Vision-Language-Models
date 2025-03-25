@@ -127,7 +127,7 @@ def main():
     if args.run_shr_benchmark:
         run_shr_benchmark(model,processor,args)
     if args.run_mmbench_benchmark:
-        run_mmbench_benchmark
+        run_mmbench_benchmark(model,processor,args)
 
 def run_mmbench_benchmark(model,processor,args):
     experiment_name = os.path.join("experiments", "--".join(args.model_name.split("/")), "MMBench", "SID",args.experiment_name)
@@ -211,7 +211,6 @@ def run_mmbench_benchmark(model,processor,args):
                                         "answer":answer,
                                         "options": options,
                                         "option_char": cur_option_char,
-                                        "model_id": args.model,
                                         "metadata": {}}) + "\n")
                 ans_file.flush()
 
