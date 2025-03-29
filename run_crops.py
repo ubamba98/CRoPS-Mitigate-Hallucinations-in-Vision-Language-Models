@@ -443,7 +443,6 @@ def run_shr_benchmark(model,processor,args):
     metrics["mean_hal_ratio"] = round(
         sum(metrics[run]["hal_sents_ratio"] for run in run_all)/len(run_all), 3
     )
-    metrics["model_base"] = args.model
     print("judgement :- ",judgement)
     print("metrics :- ",metrics)
     # dump judgement file
@@ -663,7 +662,6 @@ def run_pope_benchmark(model, processor, args):
         
         if pred_list:
             pope_metric(pred_list, label_list, results_path)
-
 
 def run_mme_benchmark(model, processor, args):
     experiment_name = os.path.join("experiments", "--".join(args.model_name.split("/")), "CRoPS", "MME",args.experiment_name)

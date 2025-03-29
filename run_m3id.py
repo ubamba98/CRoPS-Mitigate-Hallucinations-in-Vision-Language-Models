@@ -32,6 +32,7 @@ import os
 import gc
 import json
 import torch
+import random
 import argparse
 import numpy as np
 from tqdm.auto import tqdm
@@ -400,7 +401,6 @@ def run_shr_benchmark(model,processor,args):
     metrics["mean_hal_ratio"] = round(
         sum(metrics[run]["hal_sents_ratio"] for run in run_all)/len(run_all), 3
     )
-    metrics["model_base"] = args.model
     print("judgement :- ",judgement)
     print("metrics :- ",metrics)
     # dump judgement file
